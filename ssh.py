@@ -19,6 +19,7 @@ def parse_arguments():
     parser.add_argument('--stderr-dir', help='Directory to store stderr')
     parser.add_argument('--parallelism', type=int, default=10, help='Number of parallel connections')
     parser.add_argument('--username', default=os.environ.get('USER'), help='SSH username')
+    parser.add_argument('--timestamp', action='store_true', help='Add timestamp to output filenames (default: off)')
     
     # Find the position of -- in arguments
     try:
@@ -69,7 +70,7 @@ def read_hosts(hostfile):
 
 def execute_on_host(params):
     """Execute command on a single host and save output."""
-    host, username, password, command, stdout_dir, stderr_dir, timestamp = params
+    host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp = params
     
     print(f"Connecting to {host}...")
     try:
@@ -83,13 +84,18 @@ def execute_on_host(params):
         # Execute command
         result = conn.run(command, warn=True, hide=True)
         
-        # Save stdout
-        stdout_file = os.path.join(stdout_dir, f"{host}_{timestamp}.out")
+        # Save stdout with or without timestamp
+        if use_timestamp:
+            stdout_file = os.path.join(stdout_dir, f"{host}_{timestamp}.out")
+            stderr_file = os.path.join(stderr_dir, f"{host}_{timestamp}.err")
+        else:
+            stdout_file = os.path.join(stdout_dir, f"{host}.out")
+            stderr_file = os.path.join(stderr_dir, f"{host}.err")
+        
         with open(stdout_file, 'w') as f:
             f.write(result.stdout)
         
         # Save stderr
-        stderr_file = os.path.join(stderr_dir, f"{host}_{timestamp}.err")
         with open(stderr_file, 'w') as f:
             f.write(result.stderr)
         
@@ -103,7 +109,11 @@ def execute_on_host(params):
         print(f"[✗] {host} - Connection error: {str(e)}")
         
         # Save error to stderr file
-        stderr_file = os.path.join(stderr_dir, f"{host}_{timestamp}.err")
+        if use_timestamp:
+            stderr_file = os.path.join(stderr_dir, f"{host}_{timestamp}.err")
+        else:
+            stderr_file = os.path.join(stderr_dir, f"{host}.err")
+            
         with open(stderr_file, 'w') as f:
             f.write(f"Connection error: {str(e)}")
         
@@ -123,19 +133,20 @@ def main():
         print("No hosts found in the hostfile.")
         sys.exit(1)
     
-    # Generate timestamp for output files
+    # Generate timestamp for output files (will only be used if --timestamp is set)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     print(f"Starting parallel SSH execution:")
     print(f"- Hosts: {len(hosts)}")
     print(f"- Parallelism: {args.parallelism}")
     print(f"- Command: {args.command}")
+    print(f"- Using timestamps: {'Yes' if args.timestamp else 'No'}")
     print("-" * 50)
     
     # Prepare parameters for each host
     params = [
         (host, args.username, args.password, args.command, 
-         args.stdout_dir, args.stderr_dir, timestamp)
+         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp)
         for host in hosts
     ]
     
