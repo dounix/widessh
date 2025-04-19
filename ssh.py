@@ -74,6 +74,7 @@ def execute_on_host(params):
     host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes = params
     
     print(f"Connecting to {host}...")
+    conn = None
     try:
         # Establish SSH connection
         conn = Connection(
@@ -132,6 +133,13 @@ def execute_on_host(params):
             f.write(f"Connection error: {str(e)}")
         
         return host, False
+    finally:
+        # Explicitly close the connection to free resources
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass  # Ignore errors during connection closure
 
 def main():
     """Main function."""
