@@ -118,12 +118,11 @@ def execute_on_host(params):
         
         success = result.return_code == 0
         status = "✓" if success else "✗"
-        print(f"[{status}] {host} (exit code: {result.return_code})")
-        return host, success
+        # Don't print the status here anymore, return everything to be printed in order
+        return host, success, result.return_code
         
     except Exception as e:
-        # Handle connection errors
-        print(f"[✗] {host} - Connection error: {str(e)}")
+        # Handle connection errors but don't print the status here anymore
         
         # Save error to stderr file
         if use_timestamp:
@@ -139,7 +138,7 @@ def execute_on_host(params):
         with open(stderr_file, 'w') as f:
             f.write(f"Connection error: {str(e)}")
         
-        return host, False
+        return host, False, str(e)
 
 def main():
     """Main function."""
@@ -179,7 +178,7 @@ def main():
         results = list(executor.map(execute_on_host, params))
     
     # Print summary
-    successful = sum(1 for _, success in results if success)
+    successful = sum(1 for _, success, _ in results if success)
     failed = len(hosts) - successful
     
     print("\nExecution Summary:")
