@@ -21,6 +21,7 @@ def parse_arguments():
     parser.add_argument('--username', default=os.environ.get('USER'), help='SSH username')
     parser.add_argument('--timestamp', action='store_true', help='Add timestamp to output filenames (default: off)')
     parser.add_argument('--add-suffixes', action='store_true', help='Add .out and .err suffixes to output files (default: off)')
+    parser.add_argument('--timeout', type=int, help='Timeout in seconds for SSH operations (can also be set with PSSHTIMEOUT env var)')
     
     # Find the position of -- in arguments
     try:
@@ -43,6 +44,13 @@ def parse_arguments():
     # Validate that we now have both output directories
     if not args.stdout_dir or not args.stderr_dir:
         parser.error("You must specify either --outdir or both --stdout-dir and --stderr-dir")
+    
+    # Process timeout setting (command line takes precedence over env var)
+    if args.timeout is None and 'PSSHTIMEOUT' in os.environ:
+        try:
+            args.timeout = int(os.environ['PSSHTIMEOUT'])
+        except ValueError:
+            parser.error(f"Environment variable PSSHTIMEOUT must be an integer, got '{os.environ['PSSHTIMEOUT']}'")
     
     return args
 
@@ -71,7 +79,7 @@ def read_hosts(hostfile):
 
 def execute_on_host(params):
     """Execute command on a single host and save output."""
-    host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes = params
+    host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes, timeout = params
     
     print(f"Connecting to {host}...")
     try:
@@ -82,8 +90,8 @@ def execute_on_host(params):
             connect_kwargs={"password": password}
         )
         
-        # Execute command
-        result = conn.run(command, warn=True, hide=True)
+        # Execute command with timeout if specified
+        result = conn.run(command, warn=True, hide=True, timeout=timeout)
         
         # Construct base filename
         if use_timestamp:
@@ -156,12 +164,13 @@ def main():
     print(f"- Command: {args.command}")
     print(f"- Using timestamps: {'Yes' if args.timestamp else 'No'}")
     print(f"- Adding file suffixes: {'Yes' if args.add_suffixes else 'No'}")
+    print(f"- Timeout: {args.timeout or 'None'} seconds")
     print("-" * 50)
     
     # Prepare parameters for each host
     params = [
         (host, args.username, args.password, args.command, 
-         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp, args.add_suffixes)
+         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp, args.add_suffixes, args.timeout)
         for host in hosts
     ]
     
