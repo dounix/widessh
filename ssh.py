@@ -14,8 +14,9 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Execute commands on multiple hosts in parallel via SSH')
     parser.add_argument('--hostfile', required=True, help='File containing list of hosts (one per line)')
     parser.add_argument('--password', required=True, help='SSH password')
-    parser.add_argument('--stdout-dir', required=True, help='Directory to store stdout')
-    parser.add_argument('--stderr-dir', required=True, help='Directory to store stderr')
+    parser.add_argument('--outdir', help='Base directory for output (will create out/ and err/ subdirectories)')
+    parser.add_argument('--stdout-dir', help='Directory to store stdout')
+    parser.add_argument('--stderr-dir', help='Directory to store stderr')
     parser.add_argument('--parallelism', type=int, default=10, help='Number of parallel connections')
     parser.add_argument('--username', default=os.environ.get('USER'), help='SSH username')
     
@@ -32,13 +33,36 @@ def parse_arguments():
         # No -- found, show help
         parser.error("Command delimiter -- not found. Usage: script.py [options] -- command")
     
+    # Handle outdir setting - if specified, derive stdout and stderr dirs
+    if args.outdir:
+        args.stdout_dir = args.stdout_dir or os.path.join(args.outdir, "out")
+        args.stderr_dir = args.stderr_dir or os.path.join(args.outdir, "err")
+    
+    # Validate that we now have both output directories
+    if not args.stdout_dir or not args.stderr_dir:
+        parser.error("You must specify either --outdir or both --stdout-dir and --stderr-dir")
+    
     return args
 
 def read_hosts(hostfile):
-    """Read hosts from a file, one per line."""
+    """Read hosts from a file, one per line and deduplicate while preserving order."""
     try:
         with open(hostfile, 'r') as f:
-            return [line.strip() for line in f if line.strip() and not line.startswith('#')]
+            # Use dict.fromkeys() to deduplicate while preserving order of first appearance
+            hosts = list(dict.fromkeys([
+                line.strip() for line in f 
+                if line.strip() and not line.startswith('#')
+            ]))
+            
+            # Print info about deduplication if duplicates were found
+            original_count = len([
+                line.strip() for line in open(hostfile, 'r') 
+                if line.strip() and not line.startswith('#')
+            ])
+            if original_count > len(hosts):
+                print(f"Removed {original_count - len(hosts)} duplicate hosts.")
+                
+            return hosts
     except FileNotFoundError:
         print(f"Error: Hostfile '{hostfile}' not found.")
         sys.exit(1)
