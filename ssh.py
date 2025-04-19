@@ -21,7 +21,7 @@ def parse_arguments():
     parser.add_argument('--username', default=os.environ.get('USER'), help='SSH username')
     parser.add_argument('--timestamp', action='store_true', help='Add timestamp to output filenames (default: off)')
     parser.add_argument('--add-suffixes', action='store_true', help='Add .out and .err suffixes to output files (default: off)')
-    parser.add_argument('--timeout', type=int, help='Timeout in seconds for SSH operations (can also be set with PSSHTIMEOUT env var)')
+    parser.add_argument('--timeout', type=int, help='Timeout in seconds for SSH operations (default: PSSHTIMEOUT env var or 10)')
     
     # Find the position of -- in arguments
     try:
@@ -45,12 +45,18 @@ def parse_arguments():
     if not args.stdout_dir or not args.stderr_dir:
         parser.error("You must specify either --outdir or both --stdout-dir and --stderr-dir")
     
-    # Process timeout setting (command line takes precedence over env var)
-    if args.timeout is None and 'PSSHTIMEOUT' in os.environ:
-        try:
-            args.timeout = int(os.environ['PSSHTIMEOUT'])
-        except ValueError:
-            parser.error(f"Environment variable PSSHTIMEOUT must be an integer, got '{os.environ['PSSHTIMEOUT']}'")
+    # Process timeout setting with the following precedence:
+    # 1. Command line argument (--timeout)
+    # 2. Environment variable (PSSHTIMEOUT)
+    # 3. Default value (10 seconds)
+    if args.timeout is None:
+        if 'PSSHTIMEOUT' in os.environ:
+            try:
+                args.timeout = int(os.environ['PSSHTIMEOUT'])
+            except ValueError:
+                parser.error(f"Environment variable PSSHTIMEOUT must be an integer, got '{os.environ['PSSHTIMEOUT']}'")
+        else:
+            args.timeout = 10  # Default timeout of 10 seconds
     
     return args
 
@@ -82,6 +88,7 @@ def execute_on_host(params):
     host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes, timeout = params
     
     print(f"Connecting to {host}...")
+    conn = None
     try:
         # Establish SSH connection
         conn = Connection(
@@ -140,6 +147,15 @@ def execute_on_host(params):
             f.write(f"Connection error: {str(e)}")
         
         return host, False
+    finally:
+        # Explicitly close the connection to release resources
+        if conn:
+            try:
+                conn.close()
+                print(f"Connection to {host} closed.")
+            except Exception as e:
+                # Just log the error but don't let it propagate
+                print(f"Error closing connection to {host}: {str(e)}")
 
 def main():
     """Main function."""
