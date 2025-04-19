@@ -20,6 +20,7 @@ def parse_arguments():
     parser.add_argument('--parallelism', type=int, default=10, help='Number of parallel connections')
     parser.add_argument('--username', default=os.environ.get('USER'), help='SSH username')
     parser.add_argument('--timestamp', action='store_true', help='Add timestamp to output filenames (default: off)')
+    parser.add_argument('--add-suffixes', action='store_true', help='Add .out and .err suffixes to output files (default: off)')
     
     # Find the position of -- in arguments
     try:
@@ -70,7 +71,7 @@ def read_hosts(hostfile):
 
 def execute_on_host(params):
     """Execute command on a single host and save output."""
-    host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp = params
+    host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes = params
     
     print(f"Connecting to {host}...")
     try:
@@ -84,13 +85,21 @@ def execute_on_host(params):
         # Execute command
         result = conn.run(command, warn=True, hide=True)
         
-        # Save stdout with or without timestamp
+        # Construct base filename
         if use_timestamp:
-            stdout_file = os.path.join(stdout_dir, f"{host}_{timestamp}.out")
-            stderr_file = os.path.join(stderr_dir, f"{host}_{timestamp}.err")
+            base_stdout = f"{host}_{timestamp}"
+            base_stderr = f"{host}_{timestamp}"
         else:
-            stdout_file = os.path.join(stdout_dir, f"{host}.out")
-            stderr_file = os.path.join(stderr_dir, f"{host}.err")
+            base_stdout = f"{host}"
+            base_stderr = f"{host}"
+        
+        # Add suffixes if needed
+        if use_suffixes:
+            stdout_file = os.path.join(stdout_dir, f"{base_stdout}.out")
+            stderr_file = os.path.join(stderr_dir, f"{base_stderr}.err")
+        else:
+            stdout_file = os.path.join(stdout_dir, base_stdout)
+            stderr_file = os.path.join(stderr_dir, base_stderr)
         
         with open(stdout_file, 'w') as f:
             f.write(result.stdout)
@@ -110,9 +119,14 @@ def execute_on_host(params):
         
         # Save error to stderr file
         if use_timestamp:
-            stderr_file = os.path.join(stderr_dir, f"{host}_{timestamp}.err")
+            base_stderr = f"{host}_{timestamp}"
         else:
-            stderr_file = os.path.join(stderr_dir, f"{host}.err")
+            base_stderr = f"{host}"
+            
+        if use_suffixes:
+            stderr_file = os.path.join(stderr_dir, f"{base_stderr}.err")
+        else:
+            stderr_file = os.path.join(stderr_dir, base_stderr)
             
         with open(stderr_file, 'w') as f:
             f.write(f"Connection error: {str(e)}")
@@ -141,12 +155,13 @@ def main():
     print(f"- Parallelism: {args.parallelism}")
     print(f"- Command: {args.command}")
     print(f"- Using timestamps: {'Yes' if args.timestamp else 'No'}")
+    print(f"- Adding file suffixes: {'Yes' if args.add_suffixes else 'No'}")
     print("-" * 50)
     
     # Prepare parameters for each host
     params = [
         (host, args.username, args.password, args.command, 
-         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp)
+         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp, args.add_suffixes)
         for host in hosts
     ]
     
