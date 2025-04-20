@@ -86,7 +86,7 @@ def read_hosts(hostfile):
 
 def execute_on_host(params):
     """Execute command on a single host and save output."""
-    host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes, timeout, debug = params
+    host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes, timeout, debug, host_num, total_hosts = params
     
     if debug:
         print(f"Connecting to {host}...")
@@ -127,12 +127,25 @@ def execute_on_host(params):
         
         success = result.return_code == 0
         status = "✓" if success else "✗"
-        print(f"[{status}] {host} (exit code: {result.return_code})")
-        return host, success
+        print(f"[{status}] [{host_num}/{total_hosts}] {host} (exit code: {result.return_code})")
+        return host, success, False  # host, success, unreachable
         
     except Exception as e:
-        # Handle connection errors
-        print(f"[✗] {host} - Connection error: {str(e)}")
+        error_message = str(e)
+        
+        # Check if this is an unreachable error (SSH protocol banner error or other connection issues)
+        unreachable = (
+            "Error reading SSH protocol banner" in error_message or
+            "connection refused" in error_message.lower() or
+            "timed out" in error_message.lower() or
+            "no route to host" in error_message.lower() or
+            "network unreachable" in error_message.lower() or
+            "could not resolve" in error_message.lower()
+        )
+        
+        # Use ? for unreachable hosts, ✗ for other errors
+        status = "?" if unreachable else "✗"
+        print(f"[{status}] [{host_num}/{total_hosts}] {host} - {'Unreachable' if unreachable else 'Error'}: {error_message}")
         
         # Save error to stderr file
         if use_timestamp:
@@ -148,7 +161,7 @@ def execute_on_host(params):
         with open(stderr_file, 'w') as f:
             f.write(f"Connection error: {str(e)}")
         
-        return host, False
+        return host, False, unreachable
     finally:
         # Explicitly close the connection to release resources
         if conn:
@@ -163,6 +176,8 @@ def execute_on_host(params):
 
 def main():
     """Main function."""
+    start_time = datetime.now()
+    
     args = parse_arguments()
     
     # Ensure output directories exist
@@ -191,25 +206,58 @@ def main():
     # Prepare parameters for each host
     params = [
         (host, args.username, args.password, args.command, 
-         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp, args.add_suffixes, args.timeout, args.debug)
-        for host in hosts
+         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp, args.add_suffixes, args.timeout, args.debug, i+1, len(hosts))
+        for i, host in enumerate(hosts)
     ]
     
     # Execute in parallel
     with ThreadPoolExecutor(max_workers=args.parallelism) as executor:
         results = list(executor.map(execute_on_host, params))
     
+    # Collect unreachable hosts
+    unreachable_hosts = [host for host, _, is_unreachable in results if is_unreachable]
+    
+    # Write unreachable hosts to file if any exist
+    if unreachable_hosts:
+        unreachable_file = os.path.join(args.stdout_dir, "unreachable.hosts")
+        with open(unreachable_file, 'w') as f:
+            for host in unreachable_hosts:
+                f.write(f"{host}\n")
+    
+    # Calculate elapsed time
+    end_time = datetime.now()
+    elapsed_time = end_time - start_time
+    elapsed_seconds = elapsed_time.total_seconds()
+    
+    # Format elapsed time nicely
+    if elapsed_seconds < 60:
+        time_str = f"{elapsed_seconds:.2f} seconds"
+    elif elapsed_seconds < 3600:
+        minutes = int(elapsed_seconds // 60)
+        seconds = elapsed_seconds % 60
+        time_str = f"{minutes} minute{'s' if minutes != 1 else ''}, {seconds:.2f} seconds"
+    else:
+        hours = int(elapsed_seconds // 3600)
+        minutes = int((elapsed_seconds % 3600) // 60)
+        seconds = elapsed_seconds % 60
+        time_str = f"{hours} hour{'s' if hours != 1 else ''}, {minutes} minute{'s' if minutes != 1 else ''}, {seconds:.2f} seconds"
+    
     # Print summary
-    successful = sum(1 for _, success in results if success)
-    failed = len(hosts) - successful
+    successful = sum(1 for _, success, _ in results if success)
+    failed = sum(1 for _, success, is_unreachable in results if not success and not is_unreachable)
+    unreachable = len(unreachable_hosts)
     
     print("\nExecution Summary:")
     print(f"- Total hosts: {len(hosts)}")
     print(f"- Successful: {successful}")
     print(f"- Failed: {failed}")
+    print(f"- Unreachable: {unreachable}")
+    if unreachable > 0:
+        print(f"- Unreachable hosts saved to: {os.path.abspath(os.path.join(args.stdout_dir, 'unreachable.hosts'))}")
     print(f"- Output directories:")
     print(f"  - STDOUT: {os.path.abspath(args.stdout_dir)}")
     print(f"  - STDERR: {os.path.abspath(args.stderr_dir)}")
+    print(f"- Total elapsed time: {time_str}")
 
 if __name__ == "__main__":
     main()
