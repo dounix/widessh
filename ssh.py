@@ -4,10 +4,9 @@
 import argparse
 import os
 import sys
-import shlex
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
+import asyncssh
 from datetime import datetime
-from fabric import Connection
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -84,63 +83,67 @@ def read_hosts(hostfile):
         print(f"Error: Hostfile '{hostfile}' not found.")
         sys.exit(1)
 
-def execute_on_host(params):
+async def execute_on_host(params):
     """Execute command on a single host and save output."""
     host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes, timeout, debug, host_num, total_hosts = params
     
     if debug:
         print(f"Connecting to {host}...")
-    conn = None
+    
     try:
-        # Establish SSH connection
-        conn = Connection(
+        # Establish SSH connection using asyncssh
+        async with asyncssh.connect(
             host=host,
-            user=username,
-            connect_kwargs={"password": password}
-        )
-        
-        # Execute command with timeout if specified
-        result = conn.run(command, warn=True, hide=True, timeout=timeout)
-        
-        # Construct base filename
-        if use_timestamp:
-            base_stdout = f"{host}_{timestamp}"
-            base_stderr = f"{host}_{timestamp}"
-        else:
-            base_stdout = f"{host}"
-            base_stderr = f"{host}"
-        
-        # Add suffixes if needed
-        if use_suffixes:
-            stdout_file = os.path.join(stdout_dir, f"{base_stdout}.out")
-            stderr_file = os.path.join(stderr_dir, f"{base_stderr}.err")
-        else:
-            stdout_file = os.path.join(stdout_dir, base_stdout)
-            stderr_file = os.path.join(stderr_dir, base_stderr)
-        
-        with open(stdout_file, 'w') as f:
-            f.write(result.stdout)
-        
-        # Save stderr
-        with open(stderr_file, 'w') as f:
-            f.write(result.stderr)
-        
-        success = result.return_code == 0
-        status = "✓" if success else "✗"
-        print(f"[{status}] [{host_num}/{total_hosts}] {host} (exit code: {result.return_code})")
-        return host, success, False  # host, success, unreachable
-        
-    except Exception as e:
+            username=username,
+            password=password,
+            known_hosts=None,  # Don't verify host keys for simplicity
+            connect_timeout=timeout
+        ) as conn:
+            
+            # Execute command
+            result = await conn.run(command, check=False, timeout=timeout)
+            
+            # Construct base filename
+            if use_timestamp:
+                base_stdout = f"{host}_{timestamp}"
+                base_stderr = f"{host}_{timestamp}"
+            else:
+                base_stdout = f"{host}"
+                base_stderr = f"{host}"
+            
+            # Add suffixes if needed
+            if use_suffixes:
+                stdout_file = os.path.join(stdout_dir, f"{base_stdout}.out")
+                stderr_file = os.path.join(stderr_dir, f"{base_stderr}.err")
+            else:
+                stdout_file = os.path.join(stdout_dir, base_stdout)
+                stderr_file = os.path.join(stderr_dir, base_stderr)
+            
+            # Save stdout
+            with open(stdout_file, 'w') as f:
+                f.write(result.stdout)
+            
+            # Save stderr
+            with open(stderr_file, 'w') as f:
+                f.write(result.stderr)
+            
+            success = result.exit_status == 0
+            status = "✓" if success else "✗"
+            print(f"[{status}] [{host_num}/{total_hosts}] {host} (exit code: {result.exit_status})")
+            return host, success, False  # host, success, unreachable
+            
+    except (asyncssh.Error, asyncio.TimeoutError, OSError) as e:
         error_message = str(e)
         
-        # Check if this is an unreachable error (SSH protocol banner error or other connection issues)
+        # Check if this is an unreachable error
         unreachable = (
-            "Error reading SSH protocol banner" in error_message or
-            "connection refused" in error_message.lower() or
-            "timed out" in error_message.lower() or
+            "Connection refused" in error_message or
+            "timed out" in error_message.lower() or 
             "no route to host" in error_message.lower() or
             "network unreachable" in error_message.lower() or
-            "could not resolve" in error_message.lower()
+            "could not resolve" in error_message.lower() or
+            "connection failed" in error_message.lower() or
+            isinstance(e, asyncio.TimeoutError)
         )
         
         # Use ? for unreachable hosts, ✗ for other errors
@@ -162,20 +165,32 @@ def execute_on_host(params):
             f.write(f"Connection error: {str(e)}")
         
         return host, False, unreachable
-    finally:
-        # Explicitly close the connection to release resources
-        if conn:
-            try:
-                conn.close()
-                if debug:
-                    print(f"Connection to {host} closed.")
-            except Exception as e:
-                # Just log the error but don't let it propagate
-                if debug:
-                    print(f"Error closing connection to {host}: {str(e)}")
 
-def main():
-    """Main function."""
+async def run_parallel(hosts, args, timestamp):
+    """Run commands on multiple hosts in parallel with a concurrency limit."""
+    # Prepare parameters for each host
+    params = [
+        (host, args.username, args.password, args.command, 
+         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp, 
+         args.add_suffixes, args.timeout, args.debug, i+1, len(hosts))
+        for i, host in enumerate(hosts)
+    ]
+    
+    # Create a semaphore to limit concurrency
+    semaphore = asyncio.Semaphore(args.parallelism)
+    
+    async def run_with_limit(param):
+        async with semaphore:
+            return await execute_on_host(param)
+    
+    # Create tasks for all hosts
+    tasks = [run_with_limit(param) for param in params]
+    
+    # Wait for all tasks to complete
+    return await asyncio.gather(*tasks, return_exceptions=True)
+
+async def main_async():
+    """Main async function."""
     start_time = datetime.now()
     
     args = parse_arguments()
@@ -203,19 +218,20 @@ def main():
     print(f"- Debug mode: {'Enabled' if args.debug else 'Disabled'}")
     print("-" * 50)
     
-    # Prepare parameters for each host
-    params = [
-        (host, args.username, args.password, args.command, 
-         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp, args.add_suffixes, args.timeout, args.debug, i+1, len(hosts))
-        for i, host in enumerate(hosts)
-    ]
-    
     # Execute in parallel
-    with ThreadPoolExecutor(max_workers=args.parallelism) as executor:
-        results = list(executor.map(execute_on_host, params))
+    results = await run_parallel(hosts, args, timestamp)
+    
+    # Process results
+    valid_results = []
+    for result in results:
+        if isinstance(result, Exception):
+            print(f"Unexpected error: {result}")
+            valid_results.append((None, False, False))
+        else:
+            valid_results.append(result)
     
     # Collect unreachable hosts
-    unreachable_hosts = [host for host, _, is_unreachable in results if is_unreachable]
+    unreachable_hosts = [host for host, _, is_unreachable in valid_results if host and is_unreachable]
     
     # Write unreachable hosts to file if any exist
     if unreachable_hosts:
@@ -243,8 +259,8 @@ def main():
         time_str = f"{hours} hour{'s' if hours != 1 else ''}, {minutes} minute{'s' if minutes != 1 else ''}, {seconds:.2f} seconds"
     
     # Print summary
-    successful = sum(1 for _, success, _ in results if success)
-    failed = sum(1 for _, success, is_unreachable in results if not success and not is_unreachable)
+    successful = sum(1 for _, success, _ in valid_results if success)
+    failed = sum(1 for _, success, is_unreachable in valid_results if not success and not is_unreachable)
     unreachable = len(unreachable_hosts)
     
     print("\nExecution Summary:")
@@ -258,6 +274,10 @@ def main():
     print(f"  - STDOUT: {os.path.abspath(args.stdout_dir)}")
     print(f"  - STDERR: {os.path.abspath(args.stderr_dir)}")
     print(f"- Total elapsed time: {time_str}")
+
+def main():
+    """Entry point to run the async main function."""
+    asyncio.run(main_async())
 
 if __name__ == "__main__":
     main()
