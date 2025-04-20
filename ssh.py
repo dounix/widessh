@@ -22,6 +22,7 @@ def parse_arguments():
     parser.add_argument('--timestamp', action='store_true', help='Add timestamp to output filenames (default: off)')
     parser.add_argument('--add-suffixes', action='store_true', help='Add .out and .err suffixes to output files (default: off)')
     parser.add_argument('--timeout', type=int, help='Timeout in seconds for SSH operations (default: PSSHTIMEOUT env var or 10)')
+    parser.add_argument('-d', '--debug', action='store_true', help='Enable debug output (default: off)')
     
     # Find the position of -- in arguments
     try:
@@ -85,9 +86,10 @@ def read_hosts(hostfile):
 
 def execute_on_host(params):
     """Execute command on a single host and save output."""
-    host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes, timeout = params
+    host, username, password, command, stdout_dir, stderr_dir, timestamp, use_timestamp, use_suffixes, timeout, debug = params
     
-    print(f"Connecting to {host}...")
+    if debug:
+        print(f"Connecting to {host}...")
     conn = None
     try:
         # Establish SSH connection
@@ -152,10 +154,12 @@ def execute_on_host(params):
         if conn:
             try:
                 conn.close()
-                print(f"Connection to {host} closed.")
+                if debug:
+                    print(f"Connection to {host} closed.")
             except Exception as e:
                 # Just log the error but don't let it propagate
-                print(f"Error closing connection to {host}: {str(e)}")
+                if debug:
+                    print(f"Error closing connection to {host}: {str(e)}")
 
 def main():
     """Main function."""
@@ -181,12 +185,13 @@ def main():
     print(f"- Using timestamps: {'Yes' if args.timestamp else 'No'}")
     print(f"- Adding file suffixes: {'Yes' if args.add_suffixes else 'No'}")
     print(f"- Timeout: {args.timeout or 'None'} seconds")
+    print(f"- Debug mode: {'Enabled' if args.debug else 'Disabled'}")
     print("-" * 50)
     
     # Prepare parameters for each host
     params = [
         (host, args.username, args.password, args.command, 
-         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp, args.add_suffixes, args.timeout)
+         args.stdout_dir, args.stderr_dir, timestamp, args.timestamp, args.add_suffixes, args.timeout, args.debug)
         for host in hosts
     ]
     
