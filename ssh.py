@@ -235,7 +235,7 @@ async def main_async():
     
     # Write unreachable hosts to file if any exist
     if unreachable_hosts:
-        unreachable_file = os.path.join(args.stdout_dir, "unreachable.hosts")
+        unreachable_file = os.path.join(args.outdir, "unreachable.hosts")
         with open(unreachable_file, 'w') as f:
             for host in unreachable_hosts:
                 f.write(f"{host}\n")
