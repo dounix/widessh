@@ -269,7 +269,7 @@ async def main_async():
     print(f"- Failed: {failed}")
     print(f"- Unreachable: {unreachable}")
     if unreachable > 0:
-        print(f"- Unreachable hosts saved to: {os.path.abspath(os.path.join(args.stdout_dir, 'unreachable.hosts'))}")
+        print(f"- Unreachable hosts saved to: {os.path.abspath(os.path.join(args.outdir, 'unreachable.hosts'))}")
     print(f"- Output directories:")
     print(f"  - STDOUT: {os.path.abspath(args.stdout_dir)}")
     print(f"  - STDERR: {os.path.abspath(args.stderr_dir)}")
